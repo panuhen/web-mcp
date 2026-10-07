@@ -45,7 +45,7 @@ def setup_logging(settings: Settings) -> None:
         stream=sys.stderr,
     )
     # Third-party loggers that would print URLs or queries.
-    quiet = ["httpx", "httpcore", "curl_cffi", "playwright", "camoufox", "asyncio", "trafilatura", "htmldate", "courlan"]
+    quiet = ["httpx", "httpx2", "httpcore", "curl_cffi", "playwright", "camoufox", "asyncio", "trafilatura", "htmldate", "courlan"]
     if not settings.log_details:
         quiet += ["mcp.server.mcpserver.server", "mcp.server.lowlevel.server"]
     for name in quiet:

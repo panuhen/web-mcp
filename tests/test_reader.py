@@ -269,3 +269,12 @@ async def test_cached_text_is_never_served_for_another_url():
     assert not cached and "BRAVO" in pb.text and "ALPHA" not in pb.text
     pa2, cached = await r.read_page(a + "?x=1")
     assert not cached  # a different query string is a different URL
+
+
+async def test_browser_403_with_little_text_is_a_block():
+    small = "<html><body><p>" + "Please verify you are allowed to see this site. " * 13 + "</p></body></html>"
+    http = FakeHttp({URL: html(CF, status=403), SNAP: wayback(False)})
+    browser = FakeBrowser(BrowserPage(url=URL, status=403, html=small, title="site"))
+    with pytest.raises(ReadError) as e:
+        await reader(http, browser).read_page(URL)
+    assert "browser: blocked (HTTP 403)" in str(e.value)

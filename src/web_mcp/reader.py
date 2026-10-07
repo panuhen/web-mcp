@@ -243,7 +243,9 @@ class PageReader:
                 return f"too complex to extract ({e})", None
             if not ex.title:
                 ex.title = bp.title
-        if bp.status in BLOCK_STATUSES and not bp.challenge_cleared and len(ex.text) < 300:
+        # A block status with only a little text is a block page, even when no
+        # known vendor marker matched (seen live: a 403 page with ~640 chars).
+        if bp.status in BLOCK_STATUSES and not bp.challenge_cleared and len(ex.text) < 1500:
             return f"blocked (HTTP {bp.status})", None
         if not ex.text.strip():
             return "no readable content", None
