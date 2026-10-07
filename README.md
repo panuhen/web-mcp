@@ -81,13 +81,17 @@ All steps run inside one call, under one deadline (`READ_DEADLINE`, 25 s):
    (Cloudflare "Just a moment…", `cf-mitigated`, DataDome, PerimeterX, Akamai,
    Incapsula, AWS WAF, Kasada, Vercel, Reddit's block page, CAPTCHA pages,
    "enable JavaScript"), a network error, or an app shell with almost no text.
-   It waits for a challenge to clear (`CHALLENGE_WAIT`, 15 s). The browser
+   It waits for a challenge to clear (`CHALLENGE_WAIT`, 15 s), then until
+   navigation has been quiet for a second and the page has text (at most 8 s).
+   This lets JS challenges such as Reddit's navigate to the real page.
+   Challenge tokens are stripped from the reported URL. The browser
    process starts on first use, stays warm and closes after 5 min idle. Each
    call gets a fresh browser context (cookies, storage and cache are not
    shared). At most 2 pages run at once. It never opens a window: it is
    headless, or uses an Xvfb display *inside* the container (`STEALTH_HEADLESS=virtual`).
-3. **`archive`**: the Wayback Machine availability API, then the raw snapshot
-   (`id_`). Also used for 404/410.
+3. **`archive`**: the latest Wayback Machine snapshot, original bytes (`id_`),
+   in one request through the snapshot redirect. The availability API is
+   skipped because it answers 429 to busy IPs. Also used for 404/410.
 
 - **Per-domain memory.** A domain whose plain HTTP step was blocked goes
   straight to the browser for 24 h.
@@ -122,8 +126,15 @@ Pages and search results feed LLM agents, so:
   hard total time limit applies per HTTP request, with no file downloads.
   Content types are limited to HTML, text, JSON, XML and PDF. The browser
   copies at most 3 M characters of DOM, allows 8 redirects and 12 page
-  navigations per call, and refuses downloads. PDF text extraction runs in a
-  child process with 1 GiB memory and 60 s CPU limits, killed at the deadline.
+  navigations per call, and refuses downloads.
+- **Bounded extraction.** All parsing (HTML, text, JSON, PDF and search
+  result pages) runs in a pool of two worker processes with a 1 GiB memory
+  limit and a per-job time limit (`EXTRACT_TIMEOUT`, 10 s). On a timeout or
+  cancellation the workers are killed and restarted, and the answer is
+  "Page too complex to extract". Before parsing, input is capped at 3 M
+  characters of HTML and 100,000 tags (2 M characters for JSON), and PDFs at
+  300 pages. Challenge detection uses only linear-time regexes, and odd
+  charsets (base64, zlib, …) are ignored.
 - **Untrusted-content marking.** Every result starts with "untrusted web page"
   or "untrusted web content" and ends with an end marker.
 - **Privacy logging.** By default the logs hold only counts, timings, the
@@ -213,6 +224,7 @@ IP flagged.
 | `CACHE_TTL` / `CACHE_SIZE` | `3600` / `256` | Page cache |
 | `DOMAIN_MEMORY_TTL` | `86400` | How long a blocked domain skips plain HTTP |
 | `ARCHIVE_ENABLED` | `1` | Wayback fallback |
+| `EXTRACT_TIMEOUT` | `10` | Wall-clock limit per extraction (worker process) |
 | `STEALTH_ENABLED` | `1` | Browser step and browser search |
 | `STEALTH_HEADLESS` | `virtual` in compose, `true` otherwise | `virtual` = Xvfb inside the container |
 | `STEALTH_IDLE_CLOSE` | `300` | Seconds before an idle browser closes |
@@ -279,6 +291,9 @@ The unit tests cover:
 - the ladder with fake fetchers: escalation, domain memory, archive, deadline and cancellation
 - the SSRF guard: every private range, odd IP spellings, a redirect to localhost, the egress proxy
 - truncation, the page and search caches, and cache keys
+- pathological input: deep nesting, millions of elements, a giant line,
+  huge attributes, regex bait, odd charsets, deep JSON, a 20,000-page PDF,
+  the time-limit kill and the memory limit
 - search shaping, the healthy-engine retry, layer ordering, pacing, and the result page parsers
 - caps against a local fake server: oversized bodies, lying Content-Length,
   gzip and brotli bombs, a slow drip, PDF size and a killable PDF worker,
@@ -291,4 +306,56 @@ environment variable, so a deployment cannot turn it on.
 
 ### Live results
 
-RESULTS_PLACEHOLDER
+Measured on 2026-10-07 from a home connection, through a real MCP client
+against the running container. Page contents were not stored. In total there
+were about 75 page fetches and 19 searches, spread out, one read per site.
+
+**Reads.** 15 ordinary sites (docs, Wikipedia, GitHub, news, arXiv HTML and
+PDF, a JSON API, an RFC text file, Hacker News) and 10 bot-protected sites
+(Reddit, Stack Overflow, Reuters, Zillow, Ticketmaster, Etsy, Walmart, G2,
+Glassdoor, nowsecure.nl).
+
+| | Result |
+|---|---|
+| Ordinary | 15/15, all via `http` |
+| Protected (full run) | 9/10 reported: 3 `http`, 4 `browser`, 2 `archive`; Reddit failed |
+| Protected, corrected | G2's "success" was a 403 block page with ~640 chars. That is now treated as blocked, so the honest count was 8/10. Reddit was then fixed (the browser now waits for its JS challenge to navigate) and reads via `browser` in 8.5 s. |
+| Step success | `http` 18/25 on the first pass. `browser` 4/7 (Reddit, Etsy and nowsecure.nl failed; the Reddit fix came later). `archive` 2/3. |
+| Latency, all reads | median 0.94 s, p90 7.8 s |
+| Latency by method | `http` median 0.58 s, p90 2.5 s; `browser` median 5.7 s, p90 7.8 s (cold start included); `archive` ~20 s |
+| Cache hit | 28–40 ms |
+
+The Wayback availability API answered 429 to this IP, so the archive step
+now goes straight to the latest-snapshot URL (one request).
+
+**Search.** 6/6 answered by `searxng` (median 0.86 s, p90 1.4 s), plus one
+repeat answered by `cache` in 6 ms. The IP had been rate-limited by other
+agents' tests earlier that day.
+
+**Engine availability from this IP** (one query each via SearXNG, 20 s apart):
+
+| Engine | Result |
+|---|---|
+| mojeek | 10 results |
+| startpage | 10 results |
+| yahoo | 7 results |
+| bing | 0 results, no error (sometimes empty) |
+| google cse | "too many requests" |
+| brave | "too many requests" |
+| duckduckgo, duckduckgo web | timeout (CAPTCHA wall) |
+| presearch | not in this SearXNG version |
+
+The browser search fallback found 10 results on Startpage and 20 on Brave
+Search. DuckDuckGo's HTML endpoint was not reachable from this IP.
+
+**Resources** (`docker stats`; 2 GB limit):
+
+| State | RAM | CPU | PIDs |
+|---|---|---|---|
+| Idle, browser never started | 55 MiB | 0.1 % | 2 |
+| Browser warm, idle | 510–950 MiB (settles near 510) | 0.1–0.2 % after ~30 s | ~190 |
+| Browser closed after 5 min idle | 101 MiB (includes 2 extraction workers) | 0.1 % | 47 |
+| SearXNG (compose) | 96 MiB | 0 % | 8 |
+
+The image is about 6 GB, of which the Camoufox browser is 2.4 GB (it ships
+its own font bundle).
