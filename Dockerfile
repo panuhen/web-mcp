@@ -7,8 +7,7 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
     PATH=/opt/venv/bin:$PATH \
-    PYTHONUNBUFFERED=1 \
-    XDG_CACHE_HOME=/home/app/.cache
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
@@ -38,7 +37,9 @@ COPY src ./src
 RUN uv sync --locked --no-dev && chown -R app /app
 USER app
 
-ENV WEB_MCP_HOST=0.0.0.0 \
+# The browser lives here even when HOME points elsewhere (read-only root, HOME=/tmp).
+ENV XDG_CACHE_HOME=/home/app/.cache \
+    WEB_MCP_HOST=0.0.0.0 \
     WEB_MCP_PORT=8890 \
     SEARXNG_URL=http://searxng:8080
 EXPOSE 8890
