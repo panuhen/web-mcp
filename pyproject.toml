@@ -1,0 +1,32 @@
+[project]
+name = "web-mcp"
+version = "0.1.0"
+description = "Local MCP server with web search (SearXNG) and robust page reading for AI agents"
+requires-python = ">=3.12"
+dependencies = [
+    "camoufox>=0.5.8",
+    "curl-cffi>=0.16",
+    "httpx>=0.28.1",
+    "mcp>=2.3",
+    "pypdf>=6",
+    "trafilatura>=2.3",
+]
+
+[project.scripts]
+web-mcp = "web_mcp.server:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["live: real network fetches (run with -m live)"]
+addopts = "-m 'not live'"
