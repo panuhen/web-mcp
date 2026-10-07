@@ -14,11 +14,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import brotli
 import pytest
 
-from tests.pdfgen import tiny_pdf
 from web_mcp import egress
 from web_mcp.egress import EgressProxy
 from web_mcp.fetchers import CamoufoxFetcher, FetchError, HttpFetcher
-from web_mcp.pdfworker import extract_pdf_isolated
 from web_mcp.reader import PageReader, ReadError
 
 CAP = 1_000_000  # 1 MB cap for these tests
@@ -216,33 +214,6 @@ async def test_http_calls_do_not_share_cookies(loopback, server, proxy):
     await f.fetch(server + "/set-cookie", 5)
     r = await f.fetch(server + "/echo", 5)
     assert b"COOKIE:none" in r.body
-
-
-# --- PDF worker ------------------------------------------------------------------
-
-
-async def test_pdf_worker_extracts_in_child_process():
-    ex = await extract_pdf_isolated(tiny_pdf("Child process text"), 20)
-    assert "Child process text" in ex.text
-
-
-async def test_pdf_worker_is_killed_at_timeout(monkeypatch):
-    import sys
-
-    from web_mcp import pdfworker
-    from web_mcp.extract import UnsupportedContent
-
-    # Stand-in for a PDF that makes pypdf spin: a child that never answers.
-    real = asyncio.create_subprocess_exec
-
-    async def sleeper(*args, **kw):
-        return await real(sys.executable, "-c", "import time; time.sleep(60)", **kw)
-
-    monkeypatch.setattr(pdfworker.asyncio, "create_subprocess_exec", sleeper)
-    t0 = time.monotonic()
-    with pytest.raises(UnsupportedContent, match="too long"):
-        await extract_pdf_isolated(b"%PDF-1.4", 1.0)
-    assert time.monotonic() - t0 < 3
 
 
 # --- Browser concurrency (no real browser) -----------------------------------------

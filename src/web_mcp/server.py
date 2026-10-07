@@ -59,6 +59,7 @@ class AppState:
     reader: object
     stealth: object | None
     egress: object
+    extractor: object = None
 
 
 def build_state(settings: Settings):
@@ -68,7 +69,10 @@ def build_state(settings: Settings):
     from .search import Searcher
     from .state import DomainMemory, TTLCache
 
+    from .worker import ExtractorPool
+
     egress = EgressProxy()
+    extractor = ExtractorPool(workers=2, timeout=settings.extract_timeout)
     http = HttpFetcher(None, settings.max_download_bytes, settings.max_redirects)
     stealth = (
         CamoufoxFetcher(
@@ -91,6 +95,8 @@ def build_state(settings: Settings):
         memory=DomainMemory(settings.domain_memory_ttl),
         archive_enabled=settings.archive_enabled,
         log_details=settings.log_details,
+        extractor=extractor,
+        extract_timeout=settings.extract_timeout,
     )
     from .pacing import TokenBucket, parse_rate
 
@@ -108,8 +114,11 @@ def build_state(settings: Settings):
         cache_ttl=settings.search_cache_ttl,
         empty_ttl=settings.search_empty_ttl,
         deadline=settings.search_deadline,
+        extractor=extractor,
     )
-    return AppState(settings, searcher, reader, stealth, egress), http
+    state = AppState(settings, searcher, reader, stealth, egress)
+    state.extractor = extractor
+    return state, http
 
 
 def create_server(settings: Settings | None = None):
@@ -144,6 +153,7 @@ def create_server(settings: Settings | None = None):
                 await state.stealth.close()
             await state.searcher.close()
             await state.egress.close()
+            state.extractor.close()
 
     mcp = MCPServer("web", instructions=INSTRUCTIONS, version="0.1.0", lifespan=lifespan, log_level=settings.log_level)
 
@@ -179,6 +189,7 @@ def create_server(settings: Settings | None = None):
                 "search_engines_resting": sorted(state.searcher.health.unhealthy()),
                 "search_pacing_waits": state.searcher.pacer.waited,
                 "egress": {"connections": state.egress.connections, "refused": state.egress.refused},
+                "extractor": {"jobs": state.extractor.jobs, "restarts": state.extractor.restarts},
             }
         )
 

@@ -204,7 +204,9 @@ class Searcher:
         empty_ttl: float = 300.0,
         deadline: float = 35.0,
         clock=time.monotonic,
+        extractor=None,
     ):
+        self.extractor = extractor  # worker.ExtractorPool for parsing result pages
         self.searxng_url = searxng_url.rstrip("/")
         self.brave_api_key = brave_api_key
         self.exa_api_key = exa_api_key
@@ -433,7 +435,15 @@ class Searcher:
         reason = detect_challenge(page.html, None)
         if reason:
             raise SearchError(f"blocked ({reason})")
-        results = await asyncio.to_thread(engine.parse, page.html)
+        if self.extractor is not None:
+            from .worker import TooComplex
+
+            try:
+                results = await self.extractor.run(engine.parse, page.html, timeout=10.0)
+            except TooComplex as e:
+                raise SearchError(f"result page too complex ({e})") from None
+        else:
+            results = await asyncio.to_thread(engine.parse, page.html)
         self._count(f"browser:{name}:pages")
         return results
 

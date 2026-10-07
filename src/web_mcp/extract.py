@@ -14,6 +14,12 @@ for _name in ("trafilatura", "htmldate", "courlan", "pypdf"):
 # Hard cap on what we keep per page (the cache stores this much).
 MAX_KEEP_CHARS = 200_000
 MAX_PDF_PAGES = 300
+# Caps applied before any parser sees the input. Extraction also runs in a
+# time- and memory-limited worker (worker.py); these keep the work small.
+MAX_HTML_CHARS = 3_000_000
+MAX_TAGS = 100_000           # elements budget: the document is cut after this many tags
+MAX_TEXT_CHARS = 3_000_000
+MAX_JSON_CHARS = 2_000_000
 
 HTML_TYPES = ("text/html", "application/xhtml+xml")
 TEXT_TYPES = ("application/xml", "application/rss+xml", "application/atom+xml", "application/javascript")
@@ -46,23 +52,35 @@ def is_supported(content_type: str | None) -> bool:
 
 
 def _charset(content_type: str | None) -> str | None:
-    m = re.search(r"charset=([\w\-]+)", content_type or "", re.I)
+    m = re.search(r"charset=([\w\-]{1,40})", (content_type or "")[:500], re.I)
     return m.group(1) if m else None
 
 
+def _text_codec(name: str | None) -> str | None:
+    """Only real text encodings (no base64/zlib/rot13-style codecs)."""
+    if not name:
+        return None
+    import codecs
+
+    try:
+        info = codecs.lookup(name)
+    except LookupError:
+        return None
+    if not getattr(info, "_is_text_encoding", True):
+        return None
+    return info.name
+
+
 def decode(body: bytes, content_type: str | None) -> str:
-    cs = _charset(content_type)
+    cs = _text_codec(_charset(content_type))
+    if cs is None:
+        head = body[:4096].decode("ascii", errors="ignore")
+        m = re.search(r"<meta[^<>]{0,200}charset=[\"']?([\w\-]{1,40})", head, re.I)
+        cs = _text_codec(m.group(1)) if m else None
     if cs:
         try:
             return body.decode(cs, errors="replace")
-        except LookupError:
-            pass
-    head = body[:4096].decode("ascii", errors="ignore")
-    m = re.search(r"<meta[^>]+charset=[\"']?([\w\-]+)", head, re.I)
-    if m:
-        try:
-            return body.decode(m.group(1), errors="replace")
-        except LookupError:
+        except (LookupError, UnicodeError, ValueError):
             pass
     try:
         return body.decode("utf-8")
@@ -71,14 +89,30 @@ def decode(body: bytes, content_type: str | None) -> str:
 
 
 def _clean(text: str) -> str:
+    # Line by line instead of a regex like [ \t]+\n, which goes quadratic on
+    # one huge line of spaces.
     text = text.replace("\r\n", "\n")
-    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = "\n".join(line.rstrip(" \t") for line in text.split("\n"))
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()[:MAX_KEEP_CHARS]
 
 
+def cap_html(html: str) -> str:
+    """Cut a document to MAX_HTML_CHARS and to at most MAX_TAGS tags."""
+    html = html[:MAX_HTML_CHARS]
+    if html.count("<") > MAX_TAGS:
+        pos = -1
+        for _ in range(MAX_TAGS):
+            pos = html.find("<", pos + 1)
+            if pos < 0:
+                break
+        if pos > 0:
+            html = html[:pos]
+    return html
+
+
 def html_title(html: str) -> str:
-    m = re.search(r"<title[^>]*>([\s\S]*?)</title>", html[:200_000], re.I)
+    m = re.search(r"<title[^<>]{0,200}>([^<]{0,1000})</title>", html[:200_000], re.I)
     if not m:
         return ""
     import html as _h
@@ -90,7 +124,7 @@ def extract_html(html: str, url: str | None = None) -> Extracted:
     import trafilatura
     from trafilatura.metadata import extract_metadata
 
-    html = html[:5_000_000]
+    html = cap_html(html)
     text = trafilatura.extract(
         html,
         url=url,
@@ -131,7 +165,7 @@ def listing_text(html: str, limit: int = 30_000) -> str:
     try:
         import lxml.html
 
-        doc = lxml.html.fromstring(html)
+        doc = lxml.html.fromstring(cap_html(html))
     except Exception:
         return ""
     for bad in doc.xpath("//script|//style|//noscript|//nav|//header|//footer|//form|//svg|//*[@aria-hidden='true']"):
@@ -196,13 +230,15 @@ def extract_body(body: bytes, content_type: str | None, url: str | None = None) 
     mt = media_type(content_type)
     text = decode(body, content_type)
     if mt in JSON_TYPES or mt.endswith("+json"):
+        text = text[:MAX_JSON_CHARS]
         try:
             text = json.dumps(json.loads(text), indent=1, ensure_ascii=False)
-        except ValueError:
-            pass
+        except (ValueError, RecursionError):
+            pass  # invalid, too deep or huge numbers: return it as it came
         return Extracted(text=_clean(text), title="", kind="json")
     if mt.startswith(HTML_TYPES) or (not mt and re.search(r"<html|<!doctype html", text[:2000], re.I)):
+        text = text[:MAX_HTML_CHARS]
         return extract_html(text, url)
     if mt.startswith("text/") or mt in TEXT_TYPES or mt.endswith("+xml") or not mt:
-        return Extracted(text=_clean(text), title="", kind="text")
+        return Extracted(text=_clean(text[:MAX_TEXT_CHARS]), title="", kind="text")
     raise UnsupportedContent(f"unsupported content type {mt}")

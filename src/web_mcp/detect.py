@@ -43,18 +43,43 @@ _WEAK = [
     ("access-denied", re.compile(r"<title>\s*(?:access denied|forbidden|403 forbidden|blocked)\s*</title>", re.I)),
 ]
 
-_TAG_RE = re.compile(r"<script\b[\s\S]*?</script>|<style\b[\s\S]*?</style>|<noscript\b[\s\S]*?</noscript>|<[^>]+>", re.I)
 _WS_RE = re.compile(r"\s+")
+_ANY_TAG_RE = re.compile(r"<[^<>]*>")   # [^<>] keeps it linear on "<<<<..." input
 _SPA_RE = re.compile(
-    r"<div[^>]+id=\"(?:root|app|__next|__nuxt|svelte|main-app)\"[^>]*>\s*</div>|<app-root[^>]*>\s*</app-root>",
+    r"<div[^<>]{0,300}id=\"(?:root|app|__next|__nuxt|svelte|main-app)\"[^<>]{0,300}>\s{0,200}</div>|<app-root[^<>]{0,300}>\s{0,200}</app-root>",
     re.I,
 )
 
 SMALL_TEXT = 1500
 
 
+_BLOCK_OPEN = re.compile(r"<(script|style|noscript)\b", re.I)
+
+
+def _strip_blocks(html: str) -> str:
+    """Drop <script>/<style>/<noscript> blocks. Regex search for the opener plus
+    str.find for the closer: linear time, no backtracking."""
+    low = html.lower()
+    out: list[str] = []
+    i = 0
+    while True:
+        m = _BLOCK_OPEN.search(html, i)
+        if m is None:
+            out.append(html[i:])
+            break
+        out.append(html[i : m.start()])
+        end = low.find("</" + m.group(1).lower(), m.end())
+        if end < 0:
+            break  # unclosed block: the rest is not visible text
+        close = low.find(">", end)
+        if close < 0:
+            break
+        i = close + 1
+    return "".join(out)
+
+
 def visible_text_len(html: str) -> int:
-    text = _TAG_RE.sub(" ", html[:2_000_000])
+    text = _ANY_TAG_RE.sub(" ", _strip_blocks(html[:2_000_000]))
     return len(_WS_RE.sub(" ", text).strip())
 
 
@@ -92,7 +117,8 @@ def needs_javascript(html: str, extracted_chars: int) -> bool:
     """True when the HTML is an app shell whose content only appears with JS."""
     if extracted_chars >= 250:
         return False
-    if _SPA_RE.search(html or ""):
+    sample = (html or "")[:400_000]
+    if _SPA_RE.search(sample):
         return True
-    scripts = len(re.findall(r"<script\b", html or "", re.I))
+    scripts = sample.lower().count("<script")
     return scripts >= 3 or len(html or "") > 5000

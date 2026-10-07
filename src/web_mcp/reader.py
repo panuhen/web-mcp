@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from .detect import BLOCK_STATUSES, detect_challenge, needs_javascript
 from .egress import BlockedURL, CheckedURL, check_url
 from .extract import Extracted, UnsupportedContent, extract_body, extract_html, is_pdf
-from .pdfworker import extract_pdf_isolated
+from .worker import TooComplex
 from .fetchers import BrowserPage, FetchError, RawResponse, StealthFetcher
 from .state import DomainMemory, TTLCache, normalize_url
 
@@ -58,7 +58,13 @@ class PageReader:
         archive_enabled: bool = True,
         url_checker: Callable[[str], Awaitable[CheckedURL]] = check_url,
         log_details: bool = False,
+        extractor=None,
+        extract_timeout: float = 10.0,
     ):
+        # extractor: a worker.ExtractorPool (time/memory-limited processes).
+        # None runs extraction in a thread, which tests with fake fetchers use.
+        self.extractor = extractor
+        self.extract_timeout = extract_timeout
         self.http = http
         self.stealth = stealth
         self.deadline = deadline
@@ -103,6 +109,8 @@ class PageReader:
         if page is None:
             self.stats["failed"] += 1
             self._log("failed", "-", t0, steps=len(attempts), url=url, tried=attempts)
+            if any("too complex" in a for a in attempts):
+                raise ReadError("Page too complex to extract (hit the extraction time or memory limit). Tried: " + "; ".join(attempts) + ".")
             raise ReadError("Blocked or not reachable. Tried: " + "; ".join(attempts or ["nothing"]) + ".")
         self.cache.set(key, page)
         self._log("ok", page.method, t0, chars=len(page.text), url=url)
@@ -132,8 +140,9 @@ class PageReader:
                 try_browser = False
             elif outcome.startswith("HTTP ") and not outcome.startswith("HTTP 5"):
                 try_browser = False
-            if outcome.startswith(("unsupported", "too large", "refused")):
+            if outcome.startswith(("unsupported", "too large", "refused", "too complex")):
                 try_archive = False
+                try_browser = False
 
         # Step 2: stealth browser.
         if try_browser:
@@ -146,7 +155,7 @@ class PageReader:
                     self.stats["browser_ok"] += 1
                     return page
                 attempts.append(f"browser: {outcome}")
-                if outcome.startswith(("refused", "unsupported")):
+                if outcome.startswith(("refused", "unsupported", "too complex")):
                     try_archive = False
             else:
                 attempts.append("browser: no time left")
@@ -196,9 +205,11 @@ class PageReader:
         if raw.status >= 400:
             return f"HTTP {raw.status}", None
         try:
-            ex = await extract_any(raw.body, raw.content_type, raw.url, end - time.monotonic())
+            ex = await self._extract(extract_body, raw.body, raw.content_type, raw.url, budget=end - time.monotonic())
         except UnsupportedContent as e:
             return f"unsupported ({e})", None
+        except TooComplex as e:
+            return f"too complex to extract ({e})", None
         if ex.kind == "html" and needs_javascript(text_for_detect, len(ex.text)):
             return "page needs JavaScript", None
         return "ok", Page(text=ex.text, title=ex.title, url=raw.url, method="http", kind=ex.kind)
@@ -217,14 +228,19 @@ class PageReader:
             return str(e), None
         if bp.body is not None:
             try:
-                ex = await extract_any(bp.body, bp.content_type, bp.url, budget)
+                ex = await self._extract(extract_body, bp.body, bp.content_type, bp.url, budget=budget)
             except UnsupportedContent as e:
                 return f"unsupported ({e})", None
+            except TooComplex as e:
+                return f"too complex to extract ({e})", None
         else:
             reason = detect_challenge(bp.html, None)
             if reason:
                 return f"challenge did not clear ({reason})", None
-            ex = await asyncio.to_thread(extract_html, bp.html, bp.url)
+            try:
+                ex = await self._extract(extract_html, bp.html, bp.url, budget=budget)
+            except TooComplex as e:
+                return f"too complex to extract ({e})", None
             if not ex.title:
                 ex.title = bp.title
         if bp.status in BLOCK_STATUSES and not bp.challenge_cleared and len(ex.text) < 300:
@@ -256,9 +272,11 @@ class PageReader:
         if not ts or ts == LATEST:
             return "no snapshot", None
         try:
-            ex: Extracted = await extract_any(raw.body, raw.content_type, url, max(1.0, budget))
+            ex: Extracted = await self._extract(extract_body, raw.body, raw.content_type, url, budget=budget)
         except UnsupportedContent as e:
             return f"unsupported ({e})", None
+        except TooComplex as e:
+            return f"too complex to extract ({e})", None
         if not ex.text.strip():
             return "snapshot had no readable content", None
         date = f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]}"
@@ -271,6 +289,11 @@ class PageReader:
             note=f"Wayback Machine snapshot from {date}",
         )
 
+    async def _extract(self, fn, *args, budget: float):
+        if self.extractor is None:
+            return await asyncio.to_thread(fn, *args)
+        return await self.extractor.run(fn, *args, timeout=min(self.extract_timeout, max(0.5, budget)))
+
     # ------------------------------------------------------------------ logging
 
     def _log(self, status: str, method: str, t0: float, url: str = "", tried: list[str] | None = None, **extra) -> None:
@@ -282,13 +305,6 @@ class PageReader:
                 extra["tried"] = repr(tried)
         fields = " ".join(f"{k}={v}" for k, v in extra.items())
         log.info("read_page status=%s method=%s ms=%d %s", status, method, ms, fields)
-
-
-async def extract_any(body: bytes, content_type: str, url: str, timeout: float) -> Extracted:
-    """PDFs go to a killable child process; everything else to a worker thread (input is size-capped)."""
-    if is_pdf(body, content_type):
-        return await extract_pdf_isolated(body, timeout)
-    return await asyncio.to_thread(extract_body, body, content_type, url)
 
 
 def render(page: Page, max_chars: int = 8000, cached: bool = False) -> str:

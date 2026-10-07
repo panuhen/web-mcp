@@ -56,6 +56,7 @@ class Settings:
     cache_size: int = 256
     domain_memory_ttl: float = 24 * 3600.0
     archive_enabled: bool = True
+    extract_timeout: float = 10.0        # wall-clock limit per extraction (worker process)
 
     # Stealth browser
     stealth_enabled: bool = True
@@ -92,6 +93,7 @@ class Settings:
             cache_size=_env_int("CACHE_SIZE", 256),
             domain_memory_ttl=_env_float("DOMAIN_MEMORY_TTL", 24 * 3600.0),
             archive_enabled=_env_bool("ARCHIVE_ENABLED", True),
+            extract_timeout=_env_float("EXTRACT_TIMEOUT", 10.0),
             stealth_enabled=_env_bool("STEALTH_ENABLED", True),
             stealth_headless=os.environ.get("STEALTH_HEADLESS", "true").strip().lower(),
             stealth_idle_close=_env_float("STEALTH_IDLE_CLOSE", 300.0),
