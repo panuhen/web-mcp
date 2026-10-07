@@ -17,7 +17,7 @@ import time
 import warnings
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from .egress import BlockedURL, check_url
 from .extract import is_supported, media_type
@@ -29,6 +29,17 @@ log = logging.getLogger("web_mcp.fetch")
 warnings.filterwarnings("ignore", message=".*geoip.*")
 
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+
+# Query parameters that anti-bot challenges append to the URL after they pass.
+CHALLENGE_PARAMS = {"solution", "js_challenge", "jsc_token", "jsc_orig_r", "__cf_chl_tk", "__cf_chl_rt_tk", "__cf_chl_f_tk", "__cf_chl_jschl_tk__", "__cf_chl_captcha_tk__"}
+
+
+def strip_challenge_params(url: str) -> str:
+    parts = urlsplit(url)
+    if not parts.query:
+        return url
+    kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k not in CHALLENGE_PARAMS]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(kept), parts.fragment))
 
 
 class FetchError(Exception):
@@ -210,6 +221,7 @@ _CAPPED_HTML_JS = "(n) => { const h = document.documentElement ? document.docume
 
 MAX_PAGE_CHARS = 3_000_000   # serialised DOM we copy out of the browser
 MAX_NAVIGATIONS = 12         # main-frame navigations per call (challenge reloads included)
+SETTLE_MAX = 8.0             # seconds to wait for JS-rendered text after load
 
 
 class CamoufoxFetcher:
@@ -395,11 +407,13 @@ class CamoufoxFetcher:
             return 1000 * (min(left, cap) if cap else left)
 
         navigations = 0
+        last_nav = time.monotonic()
 
         def on_nav(frame):
-            nonlocal navigations
+            nonlocal navigations, last_nav
             if frame == page.main_frame:
                 navigations += 1
+                last_nav = time.monotonic()
                 if navigations == self.max_navigations + 1:
                     # Stop a reload/redirect loop right away, not at the next check.
                     asyncio.ensure_future(page.close())
@@ -463,24 +477,29 @@ class CamoufoxFetcher:
                 except (PWTimeout, PWError):
                     pass
                 await asyncio.sleep(1.0)
-            # Let the page settle a little for JS-rendered content.
-            try:
-                await page.wait_for_load_state("load", timeout=left_ms(4.0))
-            except (PWTimeout, PWError):
-                pass
-            html = await self._html(page)
-            if visible_text_len(html) < 500 and end - time.monotonic() > 2:
+            # Let the page settle: JS challenges (Reddit, some WAFs) solve
+            # themselves and navigate to the real page a second or two later,
+            # and app shells fill in after load. Read once navigation has been
+            # quiet for a moment and there is real text, or when time is up.
+            settle_end = min(end - 0.5, time.monotonic() + SETTLE_MAX)
+            while True:
                 try:
-                    await page.wait_for_load_state("networkidle", timeout=left_ms(3.0))
+                    await page.wait_for_load_state("load", timeout=left_ms(2.0))
                 except (PWTimeout, PWError):
                     pass
                 html = await self._html(page)
+                quiet = time.monotonic() - last_nav >= 1.0
+                if quiet and visible_text_len(html) >= 500:
+                    break
+                if time.monotonic() >= settle_end or navigations > self.max_navigations:
+                    break
+                await asyncio.sleep(0.7)
             if navigations > self.max_navigations:
                 raise FetchError("too many page navigations", "error")
 
         if navigations > self.max_navigations:
             raise FetchError("too many page navigations", "error")
-        final_url = page.url
+        final_url = strip_challenge_params(page.url)
         if urlsplit(final_url).scheme not in ("http", "https"):
             raise FetchError("page ended on a non-web URL", "blocked-url")
         try:
