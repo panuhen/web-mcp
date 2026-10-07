@@ -328,10 +328,11 @@ The Wayback availability API answered 429 to this IP, so the archive step
 now goes straight to the latest-snapshot URL (one request).
 
 **Search.** 6/6 answered by `searxng` (median 0.86 s, p90 1.4 s), plus one
-repeat answered by `cache` in 6 ms. The IP had been rate-limited by other
-agents' tests earlier that day.
+repeat answered by `cache` in 6 ms.
 
-**Engine availability from this IP** (one query each via SearXNG, 20 s apart):
+**Engine availability** (one query each via SearXNG, 20 s apart, October 2026).
+Which engines answer depends on your IP and changes over time; this is why
+web-mcp spreads queries over the healthy ones and has a browser fallback:
 
 | Engine | Result |
 |---|---|
@@ -339,13 +340,13 @@ agents' tests earlier that day.
 | startpage | 10 results |
 | yahoo | 7 results |
 | bing | 0 results, no error (sometimes empty) |
-| google cse | "too many requests" |
-| brave | "too many requests" |
-| duckduckgo, duckduckgo web | timeout (CAPTCHA wall) |
+| google cse | resting (rate limit) |
+| brave | resting (rate limit) |
+| duckduckgo, duckduckgo web | timeout |
 | presearch | not in this SearXNG version |
 
 The browser search fallback found 10 results on Startpage and 20 on Brave
-Search. DuckDuckGo's HTML endpoint was not reachable from this IP.
+Search. DuckDuckGo's HTML endpoint did not answer.
 
 **Resources** (`docker stats`; 2 GB limit):
 
