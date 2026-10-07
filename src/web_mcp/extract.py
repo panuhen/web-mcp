@@ -102,8 +102,14 @@ def extract_html(html: str, url: str | None = None) -> Extracted:
         favor_recall=True,
         deduplicate=True,
     ) or ""
+    if len(text) < 1500:
+        # Index pages (news fronts, docs landing pages): trafilatura keeps one
+        # teaser. A list of headings and paragraphs is more useful there.
+        alt = listing_text(html)
+        if len(alt) > 3 * len(text):
+            text = alt
     if len(text) < 200:
-        # Very short pages, listings and app shells: fall back to all visible text.
+        # Very short pages and app shells: fall back to all visible text.
         try:
             alt = trafilatura.html2txt(html) or ""
         except Exception:
@@ -118,6 +124,35 @@ def extract_html(html: str, url: str | None = None) -> Extracted:
         title = ""
     title = title or html_title(html)
     return Extracted(text=_clean(text), title=title, kind="html")
+
+
+def listing_text(html: str, limit: int = 30_000) -> str:
+    """Headings and paragraphs of the main area, in order, without nav/header/footer."""
+    try:
+        import lxml.html
+
+        doc = lxml.html.fromstring(html)
+    except Exception:
+        return ""
+    for bad in doc.xpath("//script|//style|//noscript|//nav|//header|//footer|//form|//svg|//*[@aria-hidden='true']"):
+        bad.drop_tree()
+    roots = doc.xpath("//main") or doc.xpath("//body") or [doc]
+    lines: list[str] = []
+    seen: set[str] = set()
+    size = 0
+    for el in roots[0].iter("h1", "h2", "h3", "h4", "p", "li"):
+        t = " ".join(el.text_content().split())
+        if len(t) < 25 or t in seen:
+            continue
+        if el.tag == "li" and el.xpath(".//p|.//h2|.//h3"):
+            continue  # its children are listed on their own
+        seen.add(t)
+        line = ("## " + t) if el.tag in ("h1", "h2", "h3", "h4") else t
+        lines.append(line)
+        size += len(line)
+        if size > limit:
+            break
+    return "\n\n".join(lines)
 
 
 def extract_pdf(body: bytes, char_budget: int = MAX_KEEP_CHARS) -> Extracted:

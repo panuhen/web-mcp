@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
+import re
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
 from .detect import BLOCK_STATUSES, detect_challenge, needs_javascript
 from .egress import BlockedURL, CheckedURL, check_url
@@ -22,7 +22,8 @@ log = logging.getLogger("web_mcp.read")
 
 MIN_MAX_CHARS = 200
 MAX_MAX_CHARS = 100_000
-ARCHIVE_RESERVE = 6.0  # seconds kept back for the archive step when possible
+ARCHIVE_RESERVE = 6.0
+LATEST = "29991231000000"  # Wayback redirects this timestamp to the newest capture  # seconds kept back for the archive step when possible
 
 
 class ReadError(Exception):
@@ -233,35 +234,34 @@ class PageReader:
         return "ok", Page(text=ex.text, title=ex.title, url=bp.url, method="browser", kind=ex.kind)
 
     async def _step_archive(self, url: str, budget: float) -> tuple[str, Page | None]:
-        end = time.monotonic() + budget
-        api = "https://archive.org/wayback/available?url=" + quote(url, safe="")
+        # One request: a far-future timestamp redirects to the latest capture,
+        # and `id_` asks for the original bytes without the Wayback toolbar.
+        # (The availability API is skipped: it costs a second request and
+        # rate-limits busy IPs.)
+        latest = f"https://web.archive.org/web/{LATEST}id_/{url}"
         try:
-            raw = await asyncio.wait_for(self.http.fetch(api, min(8.0, budget)), min(8.0, budget) + 1)
-            data = json.loads(raw.body.decode("utf-8", errors="replace"))
-            snap = (data.get("archived_snapshots") or {}).get("closest") or {}
-        except (FetchError, asyncio.TimeoutError, ValueError, AttributeError):
-            return "lookup failed", None
-        if not snap.get("available") or not snap.get("url") or not snap.get("timestamp"):
+            raw = await asyncio.wait_for(self.http.fetch(latest, budget), budget + 1)
+        except asyncio.TimeoutError:
+            return "timed out", None
+        except FetchError as e:
+            return f"snapshot fetch failed ({e})", None
+        if raw.status == 404:
             return "no snapshot", None
-        ts = str(snap["timestamp"])
-        # id_ asks for the original bytes without the Wayback toolbar.
-        snap_url = f"https://web.archive.org/web/{ts}id_/{url}"
-        remaining = end - time.monotonic()
-        if remaining < 1:
-            return "no time left for the snapshot", None
-        try:
-            raw = await asyncio.wait_for(self.http.fetch(snap_url, remaining), remaining + 1)
-        except (FetchError, asyncio.TimeoutError) as e:
-            return f"snapshot fetch failed ({e or 'timed out'})", None
+        if raw.status == 429:
+            return "rate limited by archive.org", None
         if raw.status >= 400:
             return f"snapshot HTTP {raw.status}", None
+        m = re.search(r"/web/(\d{8,14})id_/", raw.url)
+        ts = m.group(1) if m else ""
+        if not ts or ts == LATEST:
+            return "no snapshot", None
         try:
-            ex: Extracted = await extract_any(raw.body, raw.content_type, url, end - time.monotonic())
+            ex: Extracted = await extract_any(raw.body, raw.content_type, url, max(1.0, budget))
         except UnsupportedContent as e:
             return f"unsupported ({e})", None
         if not ex.text.strip():
             return "snapshot had no readable content", None
-        date = f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]}" if len(ts) >= 8 else ts
+        date = f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]}"
         return "ok", Page(
             text=ex.text,
             title=ex.title,

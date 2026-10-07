@@ -1,5 +1,4 @@
 import asyncio
-import json
 import time
 from pathlib import Path
 
@@ -77,10 +76,14 @@ class FakeBrowser:
         return {}
 
 
+SNAP = "https://web.archive.org/web/29991231000000id_/"
+
+
 def wayback(available=True):
-    snap = {"available": True, "url": "http://web.archive.org/web/20240102030405/https://site.example/a", "timestamp": "20240102030405", "status": "200"}
-    body = {"url": "x", "archived_snapshots": {"closest": snap} if available else {}}
-    return RawResponse("https://archive.org/wayback/available", 200, {"content-type": "application/json"}, json.dumps(body).encode())
+    """What the latest-snapshot URL answers: a page reached by redirect, or 404."""
+    if not available:
+        return RawResponse(SNAP + URL, 404, {"content-type": "text/html"}, b"<html>not archived</html>")
+    return RawResponse("https://web.archive.org/web/20240102030405id_/" + URL, 200, {"content-type": "text/html"}, ARTICLE.encode())
 
 
 def reader(http, browser, **kw) -> PageReader:
@@ -144,8 +147,7 @@ async def test_browser_challenge_not_cleared_falls_to_archive():
     http = FakeHttp(
         {
             URL: html(CF, status=403),
-            "https://archive.org/wayback/available": wayback(),
-            "https://web.archive.org/web/20240102030405id_/": html(ARTICLE),
+            SNAP: wayback(),
         }
     )
     browser = FakeBrowser(BrowserPage(url=URL, status=403, html=CF, title="Just a moment..."))
@@ -156,7 +158,7 @@ async def test_browser_challenge_not_cleared_falls_to_archive():
 
 
 async def test_404_skips_browser_and_tries_archive():
-    http = FakeHttp({URL: html("<html>not found</html>", status=404), "https://archive.org/wayback/available": wayback(False)})
+    http = FakeHttp({URL: html("<html>not found</html>", status=404), SNAP: wayback(False)})
     browser = FakeBrowser(BrowserPage(url=URL, status=200, html=ARTICLE, title="t"))
     with pytest.raises(ReadError) as e:
         await reader(http, browser).read_page(URL)
@@ -166,7 +168,7 @@ async def test_404_skips_browser_and_tries_archive():
 
 
 async def test_everything_fails_gives_short_clear_message():
-    http = FakeHttp({URL: html(CF, status=403), "https://archive.org/wayback/available": wayback(False)})
+    http = FakeHttp({URL: html(CF, status=403), SNAP: wayback(False)})
     browser = FakeBrowser(FetchError("page load timed out", "timeout"))
     with pytest.raises(ReadError) as e:
         await reader(http, browser).read_page(URL)
@@ -200,7 +202,7 @@ async def test_cache_serves_second_read():
 
 
 async def test_failures_are_not_cached():
-    http = FakeHttp({URL: html("x", status=404), "https://archive.org/wayback/available": wayback(False)})
+    http = FakeHttp({URL: html("x", status=404), SNAP: wayback(False)})
     r = reader(http, None)
     for _ in range(2):
         with pytest.raises(ReadError):

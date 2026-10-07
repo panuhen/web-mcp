@@ -93,6 +93,7 @@ async def main() -> None:
     ap.add_argument("--url", default="http://127.0.0.1:8890/mcp")
     ap.add_argument("--pause", type=float, default=3.0)
     ap.add_argument("--skip-search", action="store_true")
+    ap.add_argument("--only", choices=["ordinary", "protected"], help="read only this group")
     args = ap.parse_args()
 
     before = health(args.url)
@@ -114,7 +115,8 @@ async def main() -> None:
                 print(f"search  {'ok ' if n else 'ERR'} {ms:6d} ms  {n} results  {prov.group(1) if prov else text[:80]}")
                 await asyncio.sleep(10.0)
 
-        for group, urls in (("ordinary", ORDINARY), ("protected", PROTECTED)):
+        groups = [g for g in (("ordinary", ORDINARY), ("protected", PROTECTED)) if not args.only or g[0] == args.only]
+        for group, urls in groups:
             for u in urls:
                 t0 = time.monotonic()
                 r = await c.call_tool("read_page", {"url": u, "max_chars": 4000})
@@ -136,7 +138,8 @@ async def main() -> None:
         if browser_rows:
             dom = browser_rows[0]["domain"]
             repeats.append(next(u for u in PROTECTED if urlsplit(u).hostname == dom))
-        repeats.append(ORDINARY[1])
+        if args.only != "protected":
+            repeats.append(ORDINARY[1])
         for u in repeats:
             t0 = time.monotonic()
             r = await c.call_tool("read_page", {"url": u, "max_chars": 2000})

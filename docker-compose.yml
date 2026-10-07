@@ -39,6 +39,8 @@ services:
       - "127.0.0.1:8890:8890"
     environment:
       SEARXNG_URL: http://searxng:8080
+      HOME: /tmp                    # Firefox writes its profile under HOME; the root fs is read-only
+      XDG_CACHE_HOME: /home/app/.cache   # where the Camoufox browser was baked in
       TZ: ${TZ:-UTC}                # match the machine's location; the browser reports it
       READ_DEADLINE: ${READ_DEADLINE:-25}
       STEALTH_HEADLESS: ${STEALTH_HEADLESS:-virtual}
@@ -50,9 +52,9 @@ services:
     mem_limit: 2g
     pids_limit: 512
     read_only: true
-    tmpfs:
+    tmpfs:                          # the only writable paths
       - /tmp:size=512m
-      - /home/app/.mozilla:size=64m
+      - /home/app/.cache/camoufox/fontconfig:size=16m,uid=10001,gid=10001
     security_opt:
       - no-new-privileges:true
     cap_drop:

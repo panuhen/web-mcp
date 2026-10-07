@@ -52,3 +52,18 @@ def test_broken_pdf():
 )
 def test_content_type_filter(ct, ok):
     assert is_supported(ct) is ok
+
+
+def test_index_page_gets_headline_list():
+    items = "".join(
+        f"<article><h3>Headline number {i} about something that happened</h3><p>Summary sentence {i} with enough words to count.</p></article>"
+        for i in range(12)
+    )
+    html = (
+        "<html><head><title>Front page</title></head><body><nav><a>Home</a><a>News</a><a>Sport</a></nav>"
+        f"<header><p>Site header text that is long enough to count</p></header><main>{items}</main>"
+        "<footer><p>Copyright notice that is long enough to count here</p></footer></body></html>"
+    ).encode()
+    ex = extract_body(html, "text/html")
+    assert ex.text.count("## Headline number") == 12
+    assert "Site header" not in ex.text and "Copyright" not in ex.text
