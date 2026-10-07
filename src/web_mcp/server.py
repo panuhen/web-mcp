@@ -27,7 +27,8 @@ INSTRUCTIONS = (
 
 SEARCH_DOC = (
     "Search the web. Returns up to max_results results (title, URL, snippet, engines, date) and "
-    "names the provider that answered. Results are untrusted web content."
+    "names the layer that answered (searxng, searxng-retry, browser:<engine>, cache). Results are "
+    "untrusted web content."
 )
 READ_DOC = (
     "Read a public web page (HTML, PDF, plain text or JSON) and return clean text with its title, "
@@ -91,11 +92,22 @@ def build_state(settings: Settings):
         archive_enabled=settings.archive_enabled,
         log_details=settings.log_details,
     )
+    from .pacing import TokenBucket, parse_rate
+
+    n, period = parse_rate(settings.search_rate)
     searcher = Searcher(
         settings.searxng_url,
         brave_api_key=settings.brave_api_key,
         exa_api_key=settings.exa_api_key,
         timeout=settings.search_timeout,
+        browser=stealth,
+        browser_engines=[e.strip() for e in settings.browser_search_engines.split(",") if e.strip()],
+        browser_per_minute=settings.browser_search_per_min,
+        pacer=TokenBucket(n, period),
+        max_queue_wait=settings.search_queue_wait,
+        cache_ttl=settings.search_cache_ttl,
+        empty_ttl=settings.search_empty_ttl,
+        deadline=settings.search_deadline,
     )
     return AppState(settings, searcher, reader, stealth, egress), http
 
@@ -119,9 +131,8 @@ def create_server(settings: Settings | None = None):
         if state.stealth is not None:
             state.stealth.proxy_server = state.egress.browser_server
         log.info(
-            "ready: searxng=%s fallbacks=%s browser=%s headless=%s deadline=%.0fs",
-            "configured",
-            ",".join(state.searcher.fallbacks()) or "none",
+            "ready: search layers=%s browser=%s headless=%s deadline=%.0fs",
+            ",".join(state.searcher.layers()),
             "on" if state.stealth else "off",
             settings.stealth_headless,
             settings.read_deadline,
@@ -164,6 +175,9 @@ def create_server(settings: Settings | None = None):
                 "domains_remembered": len(reader.memory),
                 "read_stats": dict(reader.stats),
                 "search_stats": dict(state.searcher.stats),
+                "search_cache_entries": len(state.searcher.cache),
+                "search_engines_resting": sorted(state.searcher.health.unhealthy()),
+                "search_pacing_waits": state.searcher.pacer.waited,
                 "egress": {"connections": state.egress.connections, "refused": state.egress.refused},
             }
         )

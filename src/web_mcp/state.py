@@ -44,8 +44,8 @@ class TTLCache:
         self.hits += 1
         return value
 
-    def set(self, key: str, value: Any) -> None:
-        self._data[key] = (self.clock() + self.ttl, value)
+    def set(self, key: str, value: Any, ttl: float | None = None) -> None:
+        self._data[key] = (self.clock() + (self.ttl if ttl is None else ttl), value)
         self._data.move_to_end(key)
         while len(self._data) > self.max_items:
             self._data.popitem(last=False)

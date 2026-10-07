@@ -36,8 +36,15 @@ class Settings:
     # Search
     searxng_url: str = "http://127.0.0.1:8888"
     search_timeout: float = 12.0
-    brave_api_key: str = ""
-    exa_api_key: str = ""
+    search_rate: str = "3/10"           # outgoing searches: 3 per 10 s, queued
+    search_queue_wait: float = 15.0
+    search_cache_ttl: float = 3600.0
+    search_empty_ttl: float = 300.0
+    search_deadline: float = 35.0
+    browser_search_engines: str = "startpage,brave"   # empty string turns the layer off
+    browser_search_per_min: int = 4
+    brave_api_key: str = ""             # optional, off without a key
+    exa_api_key: str = ""               # optional, off without a key
 
     # read_page
     read_deadline: float = 25.0          # overall budget for one read_page call
@@ -67,6 +74,13 @@ class Settings:
             port=_env_int("WEB_MCP_PORT", 8890),
             searxng_url=os.environ.get("SEARXNG_URL", "http://127.0.0.1:8888").rstrip("/"),
             search_timeout=_env_float("SEARCH_TIMEOUT", 12.0),
+            search_rate=os.environ.get("SEARCH_RATE", "3/10"),
+            search_queue_wait=_env_float("SEARCH_QUEUE_WAIT", 15.0),
+            search_cache_ttl=_env_float("SEARCH_CACHE_TTL", 3600.0),
+            search_empty_ttl=_env_float("SEARCH_EMPTY_TTL", 300.0),
+            search_deadline=_env_float("SEARCH_DEADLINE", 35.0),
+            browser_search_engines=os.environ.get("BROWSER_SEARCH_ENGINES", "startpage,brave"),
+            browser_search_per_min=_env_int("BROWSER_SEARCH_PER_MIN", 4),
             brave_api_key=os.environ.get("BRAVE_API_KEY", "").strip(),
             exa_api_key=os.environ.get("EXA_API_KEY", "").strip(),
             read_deadline=_env_float("READ_DEADLINE", 25.0),

@@ -1,20 +1,31 @@
-# Both services publish on 127.0.0.1 only. Start: docker compose up -d --build
+# Only web-mcp is published, on 127.0.0.1:8890. Start: docker compose up -d --build
 # Settings that differ per machine go in .env (see .env.example).
 name: web-mcp
 
 services:
   searxng:
+    # web-mcp's own SearXNG, on the compose network only (no host port).
+    # It reads the same settings directory as a standalone SearXNG, if you
+    # have one. To make this the machine's SearXNG on 127.0.0.1:8888 instead,
+    # remove the standalone container and add:
+    #   ports: ["127.0.0.1:8888:8080"]
     image: searxng/searxng:latest
-    container_name: ${SEARXNG_CONTAINER_NAME:-searxng}
+    container_name: web-mcp-searxng
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:${SEARXNG_PORT:-8888}:8080"
+    expose:
+      - "8080"
     volumes:
       # Directory holding settings.yml (JSON format on, limiter off).
       - ${SEARXNG_CONFIG_DIR:?set SEARXNG_CONFIG_DIR in .env}:/etc/searxng
       - searxng-cache:/var/cache/searxng
     environment:
-      SEARXNG_BASE_URL: http://127.0.0.1:${SEARXNG_PORT:-8888}/
+      SEARXNG_BASE_URL: http://searxng:8080/
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
 
   web-mcp:
     build: .
