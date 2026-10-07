@@ -265,18 +265,17 @@ The server must be running (`docker compose up -d`).
 claude mcp add --transport http --scope user web http://127.0.0.1:8890/mcp
 ```
 
-**Strawberry** (`~/.config/strawberry/config.toml`). Strawberry starts its
-servers over stdio, so it runs the bridge inside the container. The bridge
-forwards to the HTTP server, so all clients share one warm browser and one cache:
+**Clients that only speak stdio** can run the bridge inside the container. The
+bridge forwards to the HTTP server, so all clients share one warm browser and
+one cache. The command to launch:
 
-```toml
-[tools.servers.web]
-topic = "other"
-command = "docker"
-args = ["--context", "default", "exec", "-i", "web-mcp", "web-mcp", "bridge"]
+```sh
+docker exec -i web-mcp web-mcp bridge
 ```
 
-Without the Docker context quirk, the args are `["exec", "-i", "web-mcp", "web-mcp", "bridge"]`.
+If your Docker CLI's current context is not the engine running the container
+(for example Docker Desktop next to the system engine), add `--context default`
+before `exec`.
 
 ## Tests
 
