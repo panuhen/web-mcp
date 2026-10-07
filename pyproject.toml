@@ -2,6 +2,7 @@
 name = "web-mcp"
 version = "0.1.0"
 description = "Local MCP server with web search (SearXNG) and robust page reading for AI agents"
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "camoufox>=0.5.8",
