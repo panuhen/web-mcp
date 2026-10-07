@@ -22,7 +22,9 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends xvfb xauth tzdata fonts-liberation fonts-noto-core fonts-dejavu-core ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --create-home --uid 10001 app
+RUN useradd --create-home --uid 10001 app \
+ && mkdir -p /opt/venv/lib/python3.12/site-packages/fpgen/data \
+ && chown -R app /opt/venv/lib/python3.12/site-packages/fpgen
 USER app
 
 # The Camoufox browser and its default addon (uBlock Origin), baked into the image.

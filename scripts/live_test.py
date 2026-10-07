@@ -21,16 +21,14 @@ from urllib.parse import urlsplit
 
 from mcp import Client
 
+# The home IP was already rate-limited by other agents' tests, so this stays
+# small: 6 searches spaced 10 s apart, then one repeat that the cache answers.
 SEARCHES = [
     "python asyncio timeout context manager",
-    "SearXNG JSON API format parameter",
     "Camoufox anti-detect browser Playwright",
-    "latest Linux kernel release notes",
+    "latest news Linux kernel release",
     "how does HTTP/2 multiplexing work",
-    "Finnish meteorological institute weather API",
     "Model Context Protocol streamable HTTP transport",
-    "trafilatura text extraction benchmark",
-    "best practices docker compose restart policy",
     "Wayback Machine availability API",
 ]
 
@@ -105,16 +103,16 @@ async def main() -> None:
         print("tools:", tools)
 
         if not args.skip_search:
-            for q in SEARCHES:
+            for q in SEARCHES + [SEARCHES[0].upper()]:  # the last one should come from the cache
                 t0 = time.monotonic()
                 r = await c.call_tool("web_search", {"query": q, "max_results": 6})
                 ms = int((time.monotonic() - t0) * 1000)
                 text = r.content[0].text if r.content else ""
-                prov = re.search(r"provider: ([\w ]+);", text)
+                prov = re.search(r"provider: ([\w:\- ]+);", text)
                 n = len(re.findall(r"^\d+\. ", text, re.M))
                 out["searches"].append({"ok": not r.is_error and n > 0, "provider": prov.group(1) if prov else None, "results": n, "ms": ms})
                 print(f"search  {'ok ' if n else 'ERR'} {ms:6d} ms  {n} results  {prov.group(1) if prov else text[:80]}")
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(10.0)
 
         for group, urls in (("ordinary", ORDINARY), ("protected", PROTECTED)):
             for u in urls:
@@ -157,6 +155,7 @@ async def main() -> None:
         "searches_ok": f"{sum(s['ok'] for s in out['searches'])}/{len(out['searches'])}",
         "search_ms_median": statistics.median([s["ms"] for s in out["searches"]]) if out["searches"] else None,
         "search_ms_p90": pct([s["ms"] for s in out["searches"]], 90),
+        "search_layers": {p: sum(1 for s in out["searches"] if s["provider"] == p) for p in {s["provider"] for s in out["searches"]}},
         "reads_ok": f"{sum(r['ok'] for r in reads)}/{len(reads)}",
         "ordinary_ok": f"{sum(r['ok'] for r in reads if r['group']=='ordinary')}/{sum(1 for r in reads if r['group']=='ordinary')}",
         "protected_ok": f"{sum(r['ok'] for r in reads if r['group']=='protected')}/{sum(1 for r in reads if r['group']=='protected')}",
