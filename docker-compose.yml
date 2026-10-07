@@ -1,0 +1,56 @@
+# Both services publish on 127.0.0.1 only. Start: docker compose up -d --build
+# Settings that differ per machine go in .env (see .env.example).
+name: web-mcp
+
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: ${SEARXNG_CONTAINER_NAME:-searxng}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SEARXNG_PORT:-8888}:8080"
+    volumes:
+      # Directory holding settings.yml (JSON format on, limiter off).
+      - ${SEARXNG_CONFIG_DIR:?set SEARXNG_CONFIG_DIR in .env}:/etc/searxng
+      - searxng-cache:/var/cache/searxng
+    environment:
+      SEARXNG_BASE_URL: http://127.0.0.1:${SEARXNG_PORT:-8888}/
+
+  web-mcp:
+    build: .
+    image: web-mcp:local
+    container_name: web-mcp
+    restart: unless-stopped
+    init: true                      # reaps browser child processes
+    depends_on:
+      - searxng
+    ports:
+      - "127.0.0.1:8890:8890"
+    environment:
+      SEARXNG_URL: http://searxng:8080
+      TZ: ${TZ:-UTC}                # match the machine's location; the browser reports it
+      READ_DEADLINE: ${READ_DEADLINE:-25}
+      STEALTH_HEADLESS: ${STEALTH_HEADLESS:-virtual}
+      STEALTH_IDLE_CLOSE: ${STEALTH_IDLE_CLOSE:-300}
+      LOG_DETAILS: ${LOG_DETAILS:-0}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      EXA_API_KEY: ${EXA_API_KEY:-}
+    shm_size: 512m                  # Firefox content processes use /dev/shm
+    mem_limit: 2g
+    pids_limit: 512
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+      - /home/app/.mozilla:size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  searxng-cache:
