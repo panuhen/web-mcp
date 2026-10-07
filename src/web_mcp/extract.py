@@ -8,17 +8,15 @@ import logging
 import re
 from dataclasses import dataclass
 
-import trafilatura
-from trafilatura.metadata import extract_metadata
-
 for _name in ("trafilatura", "htmldate", "courlan", "pypdf"):
     logging.getLogger(_name).setLevel(logging.ERROR)
 
 # Hard cap on what we keep per page (the cache stores this much).
 MAX_KEEP_CHARS = 200_000
+MAX_PDF_PAGES = 300
 
 HTML_TYPES = ("text/html", "application/xhtml+xml")
-TEXT_TYPES = ("text/plain", "text/markdown", "text/csv", "text/x-", "application/x-", "text/xml", "application/xml", "application/rss+xml", "application/atom+xml")
+TEXT_TYPES = ("application/xml", "application/rss+xml", "application/atom+xml", "application/javascript")
 JSON_TYPES = ("application/json", "application/ld+json", "text/json")
 PDF_TYPES = ("application/pdf", "application/x-pdf")
 
@@ -89,6 +87,9 @@ def html_title(html: str) -> str:
 
 
 def extract_html(html: str, url: str | None = None) -> Extracted:
+    import trafilatura
+    from trafilatura.metadata import extract_metadata
+
     html = html[:5_000_000]
     text = trafilatura.extract(
         html,
@@ -132,7 +133,7 @@ def extract_pdf(body: bytes, char_budget: int = MAX_KEEP_CHARS) -> Extracted:
         parts: list[str] = []
         total = 0
         for i, page in enumerate(reader.pages):
-            if total >= char_budget or i >= 300:
+            if total >= char_budget or i >= MAX_PDF_PAGES:
                 break
             t = page.extract_text() or ""
             parts.append(t)
@@ -150,10 +151,14 @@ def extract_pdf(body: bytes, char_budget: int = MAX_KEEP_CHARS) -> Extracted:
         raise UnsupportedContent(f"could not read PDF ({type(e).__name__})") from None
 
 
+def is_pdf(body: bytes, content_type: str | None) -> bool:
+    return media_type(content_type) in PDF_TYPES or body[:5] == b"%PDF-"
+
+
 def extract_body(body: bytes, content_type: str | None, url: str | None = None) -> Extracted:
-    mt = media_type(content_type)
-    if mt in PDF_TYPES or (not mt and body[:5] == b"%PDF-") or body[:5] == b"%PDF-":
+    if is_pdf(body, content_type):
         return extract_pdf(body)
+    mt = media_type(content_type)
     text = decode(body, content_type)
     if mt in JSON_TYPES or mt.endswith("+json"):
         try:

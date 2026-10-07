@@ -13,7 +13,8 @@ from urllib.parse import quote, urlsplit
 
 from .detect import BLOCK_STATUSES, detect_challenge, needs_javascript
 from .egress import BlockedURL, CheckedURL, check_url
-from .extract import Extracted, UnsupportedContent, extract_body, extract_html
+from .extract import Extracted, UnsupportedContent, extract_body, extract_html, is_pdf
+from .pdfworker import extract_pdf_isolated
 from .fetchers import BrowserPage, FetchError, RawResponse, StealthFetcher
 from .state import DomainMemory, TTLCache, normalize_url
 
@@ -185,6 +186,8 @@ class PageReader:
         if html_like or raw.status >= 400:
             text_for_detect = raw.body[:400_000].decode("utf-8", errors="replace")
         reason = detect_challenge(text_for_detect, raw.status, raw.headers) if text_for_detect or raw.headers else None
+        if reason == "needs-javascript" and raw.status < 400:
+            return "page needs JavaScript", None
         if reason:
             return f"blocked ({reason}, HTTP {raw.status})", None
         if raw.status in BLOCK_STATUSES:
@@ -192,7 +195,7 @@ class PageReader:
         if raw.status >= 400:
             return f"HTTP {raw.status}", None
         try:
-            ex = await asyncio.to_thread(extract_body, raw.body, raw.content_type, raw.url)
+            ex = await extract_any(raw.body, raw.content_type, raw.url, end - time.monotonic())
         except UnsupportedContent as e:
             return f"unsupported ({e})", None
         if ex.kind == "html" and needs_javascript(text_for_detect, len(ex.text)):
@@ -213,7 +216,7 @@ class PageReader:
             return str(e), None
         if bp.body is not None:
             try:
-                ex = await asyncio.to_thread(extract_body, bp.body, bp.content_type, bp.url)
+                ex = await extract_any(bp.body, bp.content_type, bp.url, budget)
             except UnsupportedContent as e:
                 return f"unsupported ({e})", None
         else:
@@ -253,7 +256,7 @@ class PageReader:
         if raw.status >= 400:
             return f"snapshot HTTP {raw.status}", None
         try:
-            ex: Extracted = await asyncio.to_thread(extract_body, raw.body, raw.content_type, url)
+            ex: Extracted = await extract_any(raw.body, raw.content_type, url, end - time.monotonic())
         except UnsupportedContent as e:
             return f"unsupported ({e})", None
         if not ex.text.strip():
@@ -279,6 +282,13 @@ class PageReader:
                 extra["tried"] = repr(tried)
         fields = " ".join(f"{k}={v}" for k, v in extra.items())
         log.info("read_page status=%s method=%s ms=%d %s", status, method, ms, fields)
+
+
+async def extract_any(body: bytes, content_type: str, url: str, timeout: float) -> Extracted:
+    """PDFs go to a killable child process; everything else to a worker thread (input is size-capped)."""
+    if is_pdf(body, content_type):
+        return await extract_pdf_isolated(body, timeout)
+    return await asyncio.to_thread(extract_body, body, content_type, url)
 
 
 def render(page: Page, max_chars: int = 8000, cached: bool = False) -> str:

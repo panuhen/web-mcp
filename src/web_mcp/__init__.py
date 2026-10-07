@@ -1,2 +1,3 @@
-def hello() -> str:
-    return "Hello from web-mcp!"
+"""Local MCP server: web search and robust page reading for AI agents."""
+
+__version__ = "0.1.0"

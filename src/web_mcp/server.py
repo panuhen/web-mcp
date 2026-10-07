@@ -75,6 +75,7 @@ def build_state(settings: Settings):
             headless=settings.stealth_headless,
             idle_close=settings.stealth_idle_close,
             max_pages=settings.stealth_max_pages,
+            max_redirects=settings.max_redirects,
         )
         if settings.stealth_enabled
         else None

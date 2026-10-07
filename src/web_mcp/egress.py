@@ -64,6 +64,17 @@ _BLOCKED_NETS = [
 ALLOWED_SCHEMES = {"http", "https"}
 
 
+# Test-only switch: lets unit tests reach a fake server on 127.0.0.0/8 or ::1.
+# Off by default; there is deliberately no environment variable for it, so a
+# deployment cannot turn it on. Only tests call allow_loopback_for_tests().
+_LOOPBACK_ALLOWED_FOR_TESTS = False
+
+
+def allow_loopback_for_tests(on: bool) -> None:
+    global _LOOPBACK_ALLOWED_FOR_TESTS
+    _LOOPBACK_ALLOWED_FOR_TESTS = bool(on)
+
+
 class BlockedURL(Exception):
     """The URL is not allowed (scheme, host or address)."""
 
@@ -74,6 +85,8 @@ def blocked_reason(ip: IPAddress | str) -> str | None:
         addr = ipaddress.ip_address(ip) if isinstance(ip, str) else ip
     except ValueError:
         return "not an IP address"
+    if _LOOPBACK_ALLOWED_FOR_TESTS and addr.is_loopback:
+        return None
     if isinstance(addr, ipaddress.IPv6Address):
         # Embedded IPv4 forms: check the IPv4 address they really reach.
         if addr.ipv4_mapped is not None:
@@ -139,7 +152,7 @@ async def resolve_public(host: str, port: int) -> list[str]:
         if reason:
             raise BlockedURL(f"address refused: {reason}")
         return [str(literal)]
-    if host == "localhost" or host.endswith(".localhost"):
+    if (host == "localhost" or host.endswith(".localhost")) and not _LOOPBACK_ALLOWED_FOR_TESTS:
         raise BlockedURL("address refused: localhost")
     loop = asyncio.get_running_loop()
     try:
